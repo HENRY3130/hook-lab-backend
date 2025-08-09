@@ -1,11 +1,11 @@
-// api/generate-hooks.js - 최적화+호환 최종 버전 (Make 패스스루 OK, 원래 스키마 유지)
+// api/generate-content.js - 기존 스타일 맞춤 통합 버전 (훅 + 스크립트)
 import { OpenAI } from "openai";
 
 const openai = new OpenAI({
     apiKey: process.env.OPENAI_API_KEY,
 });
 
-// 언어 설정 및 매핑 (소문자로 통일)
+// 언어 설정 및 매핑 (기존 스타일 유지)
 const LANGUAGE_CONFIG = {
     'ko': { name: 'korean', displayName: 'Korean', code: 'ko' },
     'en': { name: 'english', displayName: 'English', code: 'en' },
@@ -16,46 +16,60 @@ const LANGUAGE_CONFIG = {
     'de': { name: 'german', displayName: 'German', code: 'de' },
     'pt': { name: 'portuguese', displayName: 'Portuguese', code: 'pt' },
     'ru': { name: 'russian', displayName: 'Russian', code: 'ru' },
-    'ar': { name: 'arabic', displayName: 'Arabic', code: 'ar' }
+    'ar': { name: 'arabic', displayName: 'Arabic', code: 'ar' },
+    'it': { name: 'italian', displayName: 'Italian', code: 'it' },
+    'nl': { name: 'dutch', displayName: 'Dutch', code: 'nl' }
 };
 
 const DEFAULT_LANGUAGE = 'en';
 
-// 다국어 메시지 (i18n 구조)
+// 다국어 메시지 (i18n 구조) - 훅과 스크립트 통합
 const i18n = {
     ko: {
-        opening: "다음 조건에 맞는 매력적인 영상 훅(Hook) 5개를 한국어로 생성해주세요:",
-        system_message: "당신은 전문적인 영상 콘텐츠 크리에이터입니다. 시청자의 관심을 즉시 끄는 강력한 훅을 만드는 전문가입니다. 모든 응답은 한국어로 해주세요.",
-        missing_fields: "필수 정보가 누락되었습니다. (주제, 스타일, 타겟 오디언스, 플랫폼)",
+        hook_opening: "다음 조건에 맞는 매력적인 영상 훅(Hook) 5개를 한국어로 생성해주세요:",
+        script_opening: "다음 조건에 맞는 매력적인 영상 스크립트를 한국어로 생성해주세요:",
+        hook_system: "당신은 전문적인 영상 콘텐츠 크리에이터입니다. 시청자의 관심을 즉시 끄는 강력한 훅을 만드는 전문가입니다. 모든 응답은 한국어로 해주세요.",
+        script_system: "당신은 전문적인 영상 콘텐츠 크리에이터입니다. 시청자의 관심을 끄는 강력한 스크립트를 만드는 전문가입니다. 모든 응답은 한국어로 해주세요.",
+        missing_fields_hook: "필수 정보가 누락되었습니다. (주제, 스타일)",
+        missing_fields_script: "필수 정보가 누락되었습니다. (텍스트, 스타일)",
+        invalid_type: "지원하지 않는 콘텐츠 타입입니다. (hooks 또는 script만 가능)",
         method_not_allowed: "허용되지 않은 메서드입니다.",
         quota_exceeded: "API 사용량 한도에 도달했습니다.",
         rate_limit: "요청 속도 제한에 걸렸습니다. 잠시 후 다시 시도해주세요.",
         invalid_api_key: "API 키가 올바르지 않습니다.",
-        generation_error: "훅 생성 중 오류가 발생했습니다."
+        generation_error: "콘텐츠 생성 중 오류가 발생했습니다."
     },
     en: {
-        opening: "Generate 5 engaging video hooks in English that meet the following conditions:",
-        system_message: "You are a professional video content creator who specializes in writing compelling hooks that instantly capture viewers' attention.",
-        missing_fields: "Missing required fields: topic, style, targetAudience, platform.",
+        hook_opening: "Generate 5 engaging video hooks in English that meet the following conditions:",
+        script_opening: "Generate an engaging video script in English that meets the following conditions:",
+        hook_system: "You are a professional video content creator who specializes in writing compelling hooks that instantly capture viewers' attention.",
+        script_system: "You are a professional video content creator who specializes in writing compelling scripts that capture viewers' attention.",
+        missing_fields_hook: "Missing required fields: topic, style.",
+        missing_fields_script: "Missing required fields: text, style.",
+        invalid_type: "Unsupported content type. Only 'hooks' or 'script' allowed.",
         method_not_allowed: "Method not allowed",
         quota_exceeded: "API quota exceeded.",
         rate_limit: "Rate limit exceeded. Please try again later.",
         invalid_api_key: "Invalid API key.",
-        generation_error: "An error occurred during hook generation."
+        generation_error: "An error occurred during content generation."
     },
     default: {
-        opening: (langName) => `Generate 5 engaging video hooks in ${langName} that meet the following conditions:`,
-        system_message: (langName) => `You are a professional video content creator who specializes in writing compelling hooks that instantly capture viewers' attention. Please respond entirely in ${langName}.`,
-        missing_fields: "Missing required fields: topic, style, targetAudience, platform.",
+        hook_opening: (langName) => `Generate 5 engaging video hooks in ${langName} that meet the following conditions:`,
+        script_opening: (langName) => `Generate an engaging video script in ${langName} that meets the following conditions:`,
+        hook_system: (langName) => `You are a professional video content creator who specializes in writing compelling hooks that instantly capture viewers' attention. Please respond entirely in ${langName}.`,
+        script_system: (langName) => `You are a professional video content creator who specializes in writing compelling scripts that capture viewers' attention. Please respond entirely in ${langName}.`,
+        missing_fields_hook: "Missing required fields: topic, style.",
+        missing_fields_script: "Missing required fields: text, style.",
+        invalid_type: "Unsupported content type. Only 'hooks' or 'script' allowed.",
         method_not_allowed: "Method not allowed",
         quota_exceeded: "API quota exceeded.",
         rate_limit: "Rate limit exceeded. Please try again later.",
         invalid_api_key: "Invalid API key.",
-        generation_error: "An error occurred during hook generation."
+        generation_error: "An error occurred during content generation."
     }
 };
 
-// 언어 정규화 및 검증 함수
+// 언어 정규화 및 검증 함수 (기존과 동일)
 function normalizeLanguage(language) {
     if (!language) return LANGUAGE_CONFIG[DEFAULT_LANGUAGE];
     const normalized = String(language).trim().toLowerCase();
@@ -73,7 +87,7 @@ function normalizeLanguage(language) {
     return LANGUAGE_CONFIG[DEFAULT_LANGUAGE];
 }
 
-// 다국어 메시지 가져오기
+// 다국어 메시지 가져오기 (기존과 동일)
 function getMessage(langCode, messageKey, ...args) {
     const messages = i18n[langCode] || i18n.default;
     const message = messages[messageKey];
@@ -84,9 +98,9 @@ function getMessage(langCode, messageKey, ...args) {
     return message || i18n.default[messageKey];
 }
 
-// 공통 프롬프트 템플릿
-function createPrompt(topic, style, targetAudience, platform, langCode) {
-    const opening = getMessage(langCode, 'opening');
+// 훅 프롬프트 템플릿 (기존과 동일)
+function createHookPrompt(topic, style, targetAudience, platform, langCode) {
+    const opening = getMessage(langCode, 'hook_opening');
     const langConfig = LANGUAGE_CONFIG[langCode];
     const needsLanguageInstruction = langCode !== 'en';
 
@@ -108,7 +122,40 @@ Each hook should be under 15 seconds. Return ONLY a JSON array of 5 strings (no 
 ${needsLanguageInstruction ? `Please respond entirely in ${langConfig?.displayName || 'the requested language'}.` : ''}`;
 }
 
-// 모델 응답이 줄글이어도 5개 뽑기
+// 스크립트 프롬프트 템플릿 (새로 추가)
+function createScriptPrompt(text, style, length, tone, language, ctaInclusion, langCode) {
+    const opening = getMessage(langCode, 'script_opening');
+    const langConfig = LANGUAGE_CONFIG[langCode];
+    const needsLanguageInstruction = langCode !== 'en';
+    
+    const lengthFormatted = length < 60 ? `${Math.round(length)} seconds` : `${Math.round(length / 60)} minutes`;
+
+    return `${opening}
+
+Topic/Keyword: ${text}
+Video Style: ${style}
+Script Length: ${lengthFormatted}
+Tone: ${tone || 'Neutral'}
+Language: ${langConfig.displayName}
+Include CTA: ${ctaInclusion ? 'Yes' : 'No'}
+
+Requirements:
+1. Create a compelling video script for short-form content
+2. Hook viewers within the first 3 seconds
+3. Maintain ${(tone || 'neutral').toLowerCase()} tone throughout
+4. Keep the script to approximately ${lengthFormatted}
+5. Focus on the topic: ${text}
+6. Use ${style.toLowerCase()} video style approach
+${ctaInclusion ? '7. Include a clear call-to-action at the end' : '7. Natural conclusion without forced CTA'}
+
+Please write a complete, engaging script that can be read aloud. Include natural pauses and emphasis where appropriate.
+
+${needsLanguageInstruction ? `Please respond entirely in ${langConfig?.displayName || 'the requested language'}.` : ''}
+
+Return the script as plain text (no JSON formatting needed).`;
+}
+
+// 모델 응답이 줄글이어도 5개 뽑기 (기존과 동일)
 function safeParseHooks(text) {
     try {
         const trimmed = (text || "").trim();
@@ -129,8 +176,8 @@ function safeParseHooks(text) {
 }
 
 export default async function handler(req, res) {
-    // CORS
-    res.setHeader("Access-Control-Allow-Origin", "*"); // 필요시 특정 도메인으로 제한
+    // CORS (기존과 동일)
+    res.setHeader("Access-Control-Allow-Origin", "*");
     res.setHeader("Access-Control-Allow-Methods", "POST, GET, OPTIONS");
     res.setHeader("Access-Control-Allow-Headers", "Content-Type, Authorization, X-Request-Id");
 
@@ -140,50 +187,66 @@ export default async function handler(req, res) {
     }
 
     try {
-        // 원래 스키마 + 프론트 확장값(무시 가능)
         const {
+            type, // 새로 추가: 'hooks' 또는 'script'
+            // 훅용 필드
             topic,
             style,
             targetAudience,
             platform,
+            // 스크립트용 필드
+            text,
+            length,
+            tone,
+            ctaInclusion,
+            // 공통 필드
             language,
-            // 아래는 참고용 확장 필드(무시해도 됨)
             _ext,
         } = req.body || {};
-
-        const _topic = topic;
-        const _style = style;
-        const _targetAudience = targetAudience || "general audience";
-        const _platform = platform || "short-form video (Reels/Shorts/TikTok)";
 
         const langConfig = normalizeLanguage(language);
         const langCode = langConfig.code;
         const langName = langConfig.displayName;
 
-        if (!_topic || !_style) {
-            return res.status(400).json({ error: getMessage(langCode, 'missing_fields') });
+        // 타입 검증
+        if (!type || !['hooks', 'script'].includes(type)) {
+            return res.status(400).json({ error: getMessage(langCode, 'invalid_type') });
         }
 
-        const hookPrompt = createPrompt(_topic, _style, _targetAudience, _platform, langCode);
-        const systemMessage = getMessage(langCode, 'system_message');
+        let prompt, systemMessage, maxTokens, temperature, result, metadata;
 
-        const completion = await openai.chat.completions.create({
-            model: "gpt-4", // 필요하면 "gpt-4o-mini"로 변경 가능
-            messages: [
-                { role: "system", content: systemMessage },
-                { role: "user", content: hookPrompt },
-            ],
-            max_tokens: 1000,
-            temperature: 0.8,
-        });
+        if (type === 'hooks') {
+            // 기존 훅 생성 로직
+            const _topic = topic;
+            const _style = style;
+            const _targetAudience = targetAudience || "general audience";
+            const _platform = platform || "short-form video (Reels/Shorts/TikTok)";
 
-        const raw = completion.choices?.[0]?.message?.content || "";
-        const hooksArray = safeParseHooks(raw);
+            if (!_topic || !_style) {
+                return res.status(400).json({ error: getMessage(langCode, 'missing_fields_hook') });
+            }
 
-        return res.status(200).json({
-            success: true,
-            hooks: hooksArray,
-            metadata: {
+            prompt = createHookPrompt(_topic, _style, _targetAudience, _platform, langCode);
+            systemMessage = getMessage(langCode, 'hook_system');
+            maxTokens = 1000;
+            temperature = 0.8;
+
+            const completion = await openai.chat.completions.create({
+                model: "gpt-4",
+                messages: [
+                    { role: "system", content: systemMessage },
+                    { role: "user", content: prompt },
+                ],
+                max_tokens: maxTokens,
+                temperature: temperature,
+            });
+
+            const raw = completion.choices?.[0]?.message?.content || "";
+            const hooksArray = safeParseHooks(raw);
+
+            result = { hooks: hooksArray };
+            metadata = {
+                type: 'hooks',
                 topic: _topic,
                 style: _style,
                 targetAudience: _targetAudience,
@@ -192,10 +255,62 @@ export default async function handler(req, res) {
                 languageCode: langCode,
                 generatedAt: new Date().toISOString(),
                 model: "gpt-4",
-            },
+            };
+
+        } else if (type === 'script') {
+            // 새로운 스크립트 생성 로직
+            const _text = text;
+            const _style = style;
+            const _length = length || 45;
+            const _tone = tone || 'Neutral';
+            const _ctaInclusion = ctaInclusion || false;
+
+            if (!_text || !_style) {
+                return res.status(400).json({ error: getMessage(langCode, 'missing_fields_script') });
+            }
+
+            prompt = createScriptPrompt(_text, _style, _length, _tone, language, _ctaInclusion, langCode);
+            systemMessage = getMessage(langCode, 'script_system');
+            maxTokens = _length <= 60 ? 600 : _length <= 120 ? 1000 : 1500;
+            temperature = 0.8;
+
+            const completion = await openai.chat.completions.create({
+                model: "gpt-4o-mini", // 스크립트는 더 비용 효율적인 모델 사용
+                messages: [
+                    { role: "system", content: systemMessage },
+                    { role: "user", content: prompt },
+                ],
+                max_tokens: maxTokens,
+                temperature: temperature,
+            });
+
+            const scriptContent = completion.choices?.[0]?.message?.content || "";
+            const wordCount = scriptContent.trim().split(/\s+/).length;
+
+            result = { result: scriptContent.trim() };
+            metadata = {
+                type: 'script',
+                topic: _text,
+                style: _style,
+                length: `${_length} seconds`,
+                tone: _tone,
+                language: langName,
+                languageCode: langCode,
+                ctaIncluded: _ctaInclusion,
+                generatedAt: new Date().toISOString(),
+                model: "gpt-4o-mini",
+                wordCount: wordCount
+            };
+        }
+
+        return res.status(200).json({
+            success: true,
+            ...result,
+            metadata: metadata,
         });
+
     } catch (error) {
-        console.error("Hook generation error:", error);
+        console.error("Content generation error:", error);
         const errorLangCode = normalizeLanguage(req.body?.language)?.code || DEFAULT_LANGUAGE;
 
         if (error?.code === "insufficient_quota") {

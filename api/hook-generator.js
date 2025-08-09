@@ -1,4 +1,4 @@
-// api/generate-hooks.js - 최적화된 최종 버전
+// api/generate-hooks.js - 최적화+호환 최종 버전 (Make 패스스루 OK, 원래 스키마 유지)
 import { OpenAI } from "openai";
 
 const openai = new OpenAI({
@@ -57,31 +57,19 @@ const i18n = {
 
 // 언어 정규화 및 검증 함수
 function normalizeLanguage(language) {
-    if (!language) {
-        return LANGUAGE_CONFIG[DEFAULT_LANGUAGE];
-    }
-    
-    const normalized = language.trim().toLowerCase();
-    
-    // 언어 코드로 검색
-    if (LANGUAGE_CONFIG[normalized]) {
-        return LANGUAGE_CONFIG[normalized];
-    }
-    
-    // 전체 언어명으로 검색 (소문자 비교)
+    if (!language) return LANGUAGE_CONFIG[DEFAULT_LANGUAGE];
+    const normalized = String(language).trim().toLowerCase();
+
+    if (LANGUAGE_CONFIG[normalized]) return LANGUAGE_CONFIG[normalized];
+
     const foundEntry = Object.entries(LANGUAGE_CONFIG).find(
-        ([code, config]) => config.name === normalized
+        ([, config]) => config.name === normalized
     );
-    
-    if (foundEntry) {
-        return foundEntry[1];
-    }
-    
-    // 개발 환경에서만 경고 로그 출력
+    if (foundEntry) return foundEntry[1];
+
     if (process.env.NODE_ENV === "development") {
         console.warn(`Unsupported language: ${language}, fallback to ${LANGUAGE_CONFIG[DEFAULT_LANGUAGE].displayName}`);
     }
-    
     return LANGUAGE_CONFIG[DEFAULT_LANGUAGE];
 }
 
@@ -89,13 +77,10 @@ function normalizeLanguage(language) {
 function getMessage(langCode, messageKey, ...args) {
     const messages = i18n[langCode] || i18n.default;
     const message = messages[messageKey];
-    
-    // 함수형 메시지 처리 (default 언어의 경우)
     if (typeof message === 'function') {
         const langConfig = LANGUAGE_CONFIG[langCode];
         return message(langConfig?.displayName || 'the requested language', ...args);
     }
-    
     return message || i18n.default[messageKey];
 }
 
@@ -104,7 +89,7 @@ function createPrompt(topic, style, targetAudience, platform, langCode) {
     const opening = getMessage(langCode, 'opening');
     const langConfig = LANGUAGE_CONFIG[langCode];
     const needsLanguageInstruction = langCode !== 'en';
-    
+
     return `${opening}
 
 Topic: ${topic}
@@ -118,127 +103,113 @@ Requirements:
 3. Relevant to the interests of ${targetAudience}
 4. Written in a ${style} style
 
-Each hook should be under 15 seconds. Number them like this:
-1. First hook
-2. Second hook
-3. Third hook
-4. Fourth hook
-5. Fifth hook
+Each hook should be under 15 seconds. Return ONLY a JSON array of 5 strings (no numbering, no extra text).
 
 ${needsLanguageInstruction ? `Please respond entirely in ${langConfig?.displayName || 'the requested language'}.` : ''}`;
 }
 
-export default async function handler(req, res) {
-    // CORS 설정
-    res.setHeader("Access-Control-Allow-Origin", "*");
-    res.setHeader("Access-Control-Allow-Methods", "POST, GET, OPTIONS");
-    res.setHeader("Access-Control-Allow-Headers", "Content-Type");
-    
-    // OPTIONS 요청 처리 (preflight)
-    if (req.method === "OPTIONS") {
-        res.status(200).end();
-        return;
-    }
-    
-    // POST 요청만 허용
-    if (req.method !== "POST") {
-        return res.status(405).json({ 
-            error: getMessage(DEFAULT_LANGUAGE, 'method_not_allowed')
-        });
-    }
-    
+// 모델 응답이 줄글이어도 5개 뽑기
+function safeParseHooks(text) {
     try {
-        const { topic, style, targetAudience, platform, language } = req.body;
-        
-        // 언어 정규화 및 검증
-        const langConfig = normalizeLanguage(language);
-        const langCode = langConfig.code;
-        const langName = langConfig.displayName;
-        
-        // 필수 필드 검증
-        if (!topic || !style || !targetAudience || !platform) {
-            return res.status(400).json({
-                error: getMessage(langCode, 'missing_fields'),
-            });
-        }
-        
-        console.log("API request received:", {
+        const trimmed = (text || "").trim();
+        if (trimmed.startsWith("[")) return JSON.parse(trimmed);
+        const lines = trimmed
+            .split("\n")
+            .map(l => l.replace(/^\s*\d+[\.\)]\s*/, "").trim())
+            .filter(Boolean)
+            .slice(0, 5);
+        return lines;
+    } catch {
+        return (text || "")
+            .split("\n")
+            .map(l => l.replace(/^\s*\d+[\.\)]\s*/, "").trim())
+            .filter(Boolean)
+            .slice(0, 5);
+    }
+}
+
+export default async function handler(req, res) {
+    // CORS
+    res.setHeader("Access-Control-Allow-Origin", "*"); // 필요시 특정 도메인으로 제한
+    res.setHeader("Access-Control-Allow-Methods", "POST, GET, OPTIONS");
+    res.setHeader("Access-Control-Allow-Headers", "Content-Type, Authorization, X-Request-Id");
+
+    if (req.method === "OPTIONS") return res.status(200).end();
+    if (req.method !== "POST") {
+        return res.status(405).json({ error: getMessage(DEFAULT_LANGUAGE, 'method_not_allowed') });
+    }
+
+    try {
+        // 원래 스키마 + 프론트 확장값(무시 가능)
+        const {
             topic,
             style,
             targetAudience,
             platform,
-            language: langName,
-            langCode
-        });
-        
-        // 프롬프트 및 시스템 메시지 생성
-        const hookPrompt = createPrompt(topic, style, targetAudience, platform, langCode);
+            language,
+            // 아래는 참고용 확장 필드(무시해도 됨)
+            _ext,
+        } = req.body || {};
+
+        const _topic = topic;
+        const _style = style;
+        const _targetAudience = targetAudience || "general audience";
+        const _platform = platform || "short-form video (Reels/Shorts/TikTok)";
+
+        const langConfig = normalizeLanguage(language);
+        const langCode = langConfig.code;
+        const langName = langConfig.displayName;
+
+        if (!_topic || !_style) {
+            return res.status(400).json({ error: getMessage(langCode, 'missing_fields') });
+        }
+
+        const hookPrompt = createPrompt(_topic, _style, _targetAudience, _platform, langCode);
         const systemMessage = getMessage(langCode, 'system_message');
-        
-        // OpenAI API 호출
+
         const completion = await openai.chat.completions.create({
-            model: "gpt-4",
+            model: "gpt-4", // 필요하면 "gpt-4o-mini"로 변경 가능
             messages: [
-                {
-                    role: "system",
-                    content: systemMessage,
-                },
-                {
-                    role: "user",
-                    content: hookPrompt,
-                },
+                { role: "system", content: systemMessage },
+                { role: "user", content: hookPrompt },
             ],
             max_tokens: 1000,
             temperature: 0.8,
         });
-        
-        const generatedHooks = completion.choices[0].message.content;
-        
-        console.log("OpenAI response generated successfully");
-        
-        // 성공 응답
-        res.status(200).json({
+
+        const raw = completion.choices?.[0]?.message?.content || "";
+        const hooksArray = safeParseHooks(raw);
+
+        return res.status(200).json({
             success: true,
-            hooks: generatedHooks,
+            hooks: hooksArray,
             metadata: {
-                topic,
-                style,
-                targetAudience,
-                platform,
+                topic: _topic,
+                style: _style,
+                targetAudience: _targetAudience,
+                platform: _platform,
                 language: langName,
                 languageCode: langCode,
                 generatedAt: new Date().toISOString(),
+                model: "gpt-4",
             },
         });
-        
     } catch (error) {
         console.error("Hook generation error:", error);
-        
-        // 언어 설정 (에러 상황에서는 기본 언어 사용)
         const errorLangCode = normalizeLanguage(req.body?.language)?.code || DEFAULT_LANGUAGE;
-        
-        // 에러 타입별 처리
-        if (error.code === "insufficient_quota") {
-            return res.status(429).json({
-                error: getMessage(errorLangCode, 'quota_exceeded'),
-            });
+
+        if (error?.code === "insufficient_quota") {
+            return res.status(429).json({ error: getMessage(errorLangCode, 'quota_exceeded') });
         }
-        
-        if (error.code === "rate_limit_exceeded") {
-            return res.status(429).json({
-                error: getMessage(errorLangCode, 'rate_limit'),
-            });
+        if (error?.code === "rate_limit_exceeded") {
+            return res.status(429).json({ error: getMessage(errorLangCode, 'rate_limit') });
         }
-        
-        if (error.code === "invalid_api_key") {
-            return res.status(401).json({
-                error: getMessage(errorLangCode, 'invalid_api_key'),
-            });
+        if (error?.code === "invalid_api_key") {
+            return res.status(401).json({ error: getMessage(errorLangCode, 'invalid_api_key') });
         }
-        
-        res.status(500).json({
+        return res.status(500).json({
             error: getMessage(errorLangCode, 'generation_error'),
-            details: process.env.NODE_ENV === "development" ? error.message : undefined,
+            details: process.env.NODE_ENV === "development" ? String(error?.message || error) : undefined,
         });
     }
 }
